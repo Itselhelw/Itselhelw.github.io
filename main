@@ -1,0 +1,245 @@
+<?php
+session_start();
+
+// Database Configuration
+$host = 'localhost';
+$db_name = 'greenich_db';
+$db_user = 'root';
+$db_pass = 'Abdelrahm@n1';
+$charset = 'utf8mb4';
+
+$dsn = "mysql:host=$host;dbname=$db_name;charset=$charset";
+
+$options = [
+    PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    PDO::ATTR_EMULATE_PREPARES   => false,
+];
+
+try {
+    $pdo = new PDO($dsn, $db_user, $db_pass, $options);
+
+    // Create tables if they don't exist
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS products (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(255) NOT NULL UNIQUE, -- Enforce unique product names
+            price DECIMAL(10, 2) NOT NULL,
+            description TEXT,
+            image_path VARCHAR(255) DEFAULT 'default.jpg',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    ");
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS users (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            email VARCHAR(255) NOT NULL UNIQUE,
+            password VARCHAR(255) NOT NULL,
+            username VARCHAR(255) NOT NULL,
+            number VARCHAR(20) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    ");
+} catch (PDOException $e) {
+    error_log("Database error: " . $e->getMessage());
+    die("An error occurred. Please try again later.");
+}
+
+// Clean up duplicate products in the database
+try {
+    $pdo->exec("
+        DELETE p1
+        FROM products p1
+        JOIN products p2
+        ON p1.name = p2.name AND p1.id > p2.id;
+    ");
+} catch (PDOException $e) {
+    error_log("Error cleaning duplicates: " . $e->getMessage());
+}
+
+// Handle Sign In
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['signin'])) {
+    $email = $_POST['email'];
+    $password = $_POST['password'];
+    $username = $_POST['username'];
+    $number = $_POST['number'];
+
+    try {
+        $checkStmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE email = :email");
+        $checkStmt->execute(['email' => $email]);
+
+        if ($checkStmt->fetchColumn() > 0) {
+            echo "Error: This email is already registered.";
+        } else {
+            $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
+            $stmt = $pdo->prepare("INSERT INTO users (email, password, username, number) VALUES (:email, :password, :username, :number)");
+            $stmt->execute(['email' => $email, 'password' => $hashedPassword, 'username' => $username, 'number' => $number]);
+            echo "Sign Up Successful!";
+        }
+    } catch (PDOException $e) {
+        error_log("Sign In error: " . $e->getMessage());
+        echo "An error occurred. Please try again later.";
+    }
+    exit;
+}
+
+// Handle Login
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
+    $email = $_POST['email'];
+    $password = $_POST['password'];
+
+    try {
+        $stmt = $pdo->prepare("SELECT * FROM users WHERE email = :email");
+        $stmt->execute(['email' => $email]);
+        $user = $stmt->fetch();
+
+        if ($user && password_verify($password, $user['password'])) {
+            $_SESSION['user'] = $user;
+            echo "Login successful!";
+        } else {
+            echo "Invalid email or password.";
+        }
+    } catch (PDOException $e) {
+        error_log("Login error: " . $e->getMessage());
+        echo "An error occurred. Please try again later.";
+    }
+    exit;
+}
+
+// Handle Logout
+if (isset($_GET['logout'])) {
+    session_destroy();
+    header("Location: index.php");
+    exit;
+}
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GREENICH</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .post {
+            border: 1px solid #ddd;
+            padding: 15px;
+            width: 250px;
+        }
+        .post img {
+            width: 100%;
+            height: auto;
+        }
+        .auth-buttons {
+            margin: 20px;
+        }
+        .form-container {
+            display: none;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 20px;
+            color: white;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 1000;
+        }
+        .close-btn {
+            background: red;
+            border: none;
+            color: white;
+            float: right;
+            cursor: pointer;
+            padding: 5px 10px;
+        }
+        footer {
+            margin-top: 20px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+<header>
+    <h1>Welcome to GREENICH</h1>
+</header>
+<nav>
+    <a href="#">Home</a>
+    <a href="#">Shop</a>
+    <a href="#">Contact Us</a>
+</nav>
+
+<!-- Main Content -->
+<div class="container">
+    <?php
+    $stmt = $pdo->query("SELECT DISTINCT name, price, description, image_path FROM products"); // Prevent duplicate products in display
+    foreach ($stmt as $product) {
+        echo "<div class='post'>";
+        $image = htmlspecialchars($product['image_path']);
+        echo "<img src='images/{$image}' alt='Product Image'>"; // Default or product-specific image
+        echo "<h3>" . htmlspecialchars($product['name']) . "</h3>";
+        echo "<p>" . htmlspecialchars($product['description']) . "</p>";
+        echo "<p><strong>$" . number_format($product['price'], 2) . "</strong></p>";
+        echo "</div>";
+    }
+    ?>
+</div>
+
+<!-- Auth Buttons -->
+<div class="auth-buttons">
+    <button onclick="toggleForm('signin')">Sign In</button>
+    <button onclick="toggleForm('login')">Log In</button>
+</div>
+
+<!-- Authentication Form -->
+<div id="auth-form" class="form-container">
+    <button class="close-btn" onclick="toggleForm('auth-form')">&times;</button>
+    <form method="POST" action="">
+        <h2 id="form-title"></h2>
+        <div id="extra-fields"></div>
+        <label for="email">Email:</label>
+        <input type="email" id="email" name="email" required>
+        <label for="password">Password:</label>
+        <input type="password" id="password" name="password" required>
+        <button type="submit" id="form-submit"></button>
+    </form>
+</div>
+
+<footer>
+    <p>&copy; 2024 GREENICH. All Rights Reserved.</p>
+</footer>
+
+<script>
+    function toggleForm(type) {
+        const form = document.getElementById('auth-form');
+        const title = document.getElementById('form-title');
+        const submitButton = document.getElementById('form-submit');
+        const extraFields = document.getElementById('extra-fields');
+
+        if (type === 'signin') {
+            title.textContent = 'Sign In';
+            submitButton.textContent = 'Sign In';
+            submitButton.name = 'signin';
+            extraFields.innerHTML = `
+                <label for="username">Username:</label>
+                <input type="text" id="username" name="username" required>
+                <label for="number">Number:</label>
+                <input type="text" id="number" name="number" required>
+            `;
+        } else if (type === 'login') {
+            title.textContent = 'Log In';
+            submitButton.textContent = 'Log In';
+            submitButton.name = 'login';
+            extraFields.innerHTML = ''; // No additional fields for login
+        }
+        form.style.display = 'block';
+    }
+</script>
+</body>
+</html>
